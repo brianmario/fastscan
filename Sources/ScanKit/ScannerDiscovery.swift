@@ -17,8 +17,8 @@ public struct ScannerEndpoint: Equatable, Hashable, Codable, Sendable {
     }
 }
 
-/// Finds Epson scanners advertising `_scanner._tcp` over Bonjour. SANE's own epsonds autodiscovery
-/// does not find the FF-680W, so the app resolves the address itself and hands SANE an explicit IP.
+/// Finds Epson scanners advertising `_scanner._tcp` over Bonjour, and resolves each to the IPv4
+/// address and port `ScannerSession` connects to.
 public enum ScannerDiscovery {
     public static let serviceType = "_scanner._tcp"
 

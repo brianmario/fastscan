@@ -189,11 +189,9 @@ do {
         guard let endpoint = try await ScannerDiscovery.discover(timeout: .seconds(10), firstOnly: true).first else {
             throw CLIError("No Epson scanner found on the local network.")
         }
-        let session = SANESession()
+        let session = ScannerSession()
         try await session.open(endpoint)
-        for option in try await session.options() {
-            print("  \(option.name) = \(option.value)  [\(option.allowed)]  \(option.title)")
-        }
+        for line in await session.details() { print("  \(line)") }
         await session.close()
     case "ocr":
         for path in arguments.positional {
