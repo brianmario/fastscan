@@ -11,21 +11,19 @@ import ScanKit
 /// The mixed screen adds synthetic photos, since no photo fixtures exist.
 @MainActor
 final class Demo {
-    static let screens = ["looking", "ready", "starting", "scanning", "reading", "file", "file-color", "file-fronts", "file-nobacks", "recoloring", "filing", "choose", "mixed", "filed", "notfound", "jam", "settings", "acknowledgements", "failed"]
+    static let screens = ["looking", "ready", "starting", "scanning", "reading", "file", "file-color", "file-fronts", "file-nobacks", "recoloring", "filing", "choose", "mixed", "filed", "notfound", "jam", "settings", "failed"]
 
     private let state: String
     private let controller: ScanWindowController
     private let job: ScanJob
     private let openSettings: () -> Void
-    private let openAcknowledgements: () -> Void
     private let scanner = ScannerEndpoint(name: "EPSON FF-680W", host: "EPSONDEMO01.local.", ipv4: "192.0.2.10", port: 1865)
 
-    init(state: String, controller: ScanWindowController, job: ScanJob, openSettings: @escaping () -> Void, openAcknowledgements: @escaping () -> Void) {
+    init(state: String, controller: ScanWindowController, job: ScanJob, openSettings: @escaping () -> Void) {
         self.state = state
         self.controller = controller
         self.job = job
         self.openSettings = openSettings
-        self.openAcknowledgements = openAcknowledgements
         job.reader = BatchReader(root: job.reader.root,
                                  indexStore: FolderIndexStore(cacheURL: URL(filePath: NSTemporaryDirectory()).appending(path: "fastscan-demo-index.json")),
                                  feedbackStore: FilingFeedbackStore(url: URL(filePath: NSTemporaryDirectory()).appending(path: "fastscan-demo-feedback.json")),
@@ -49,7 +47,7 @@ final class Demo {
             }
             try? await Task.sleep(for: .seconds(delay))
             let windows: [NSWindow] = switch state {
-            case "settings", "acknowledgements": NSApp.windows.filter { $0.title == state.capitalized && $0.isVisible }
+            case "settings": NSApp.windows.filter { $0.title == state.capitalized && $0.isVisible }
             default: [controller.window].compactMap { $0 }
             }
             Snapshot.write(windows, to: snapshot)
@@ -69,9 +67,6 @@ final class Demo {
             job.send(.failed("Lost contact with the scanner."))
         case "ready":
             job.send(.found(scanner))
-        case "acknowledgements":
-            job.send(.found(scanner))
-            openAcknowledgements()
         case "settings":
             job.send(.found(scanner))
             openSettings()

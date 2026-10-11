@@ -145,7 +145,7 @@ public final class ScanJob {
     public var photoWriter: any PhotoLibraryWriter
     public var albumDate: () -> CalendarDate = { CalendarDate(.now) }
 
-    private var session: SANESession?
+    private var session: ScannerSession?
     private var stopRequested = false
     private var keptSheets: [ScannedSheet] = []
     private var pageCount = 0
@@ -387,7 +387,7 @@ public final class ScanJob {
     private func feed() async {
         guard let endpoint = state.endpoint else { return }
         stopRequested = false
-        let session = SANESession()
+        let session = ScannerSession()
         self.session = session
         let firstSheetID = (keptSheets.last?.id ?? -1) + 1
         pageCount = 0
@@ -420,8 +420,8 @@ public final class ScanJob {
                 pageCount = raw.index + 1
                 arrival.yield(raw)
             }
-        } catch SANEError.cancelled where stopRequested {
-            // Stop keeps what was scanned.
+        } catch let error as ScannerError where error == .stoppedAtScanner || (error == .cancelled && stopRequested) {
+            // Stop, in the app or on the scanner, keeps what was scanned.
         } catch {
             failure = error
         }
@@ -430,12 +430,13 @@ public final class ScanJob {
         await session.close()
         self.session = nil
 
-        if case SANEError.jammed? = failure {
+        let jammed = failure.map { [.jammed, .doubleFeed].contains($0 as? ScannerError) } ?? false
+        if jammed {
             // A jam usually catches a sheet halfway; keep only sheets whose both sides came through.
             pageCount -= pageCount % 2
-        } else if let failure, !(failure as? SANEError == .feederEmpty && !keptSheets.isEmpty) {
+        } else if let failure, !(failure as? ScannerError == .feederEmpty && !keptSheets.isEmpty) {
             reading.cancel()
-            if (failure as? SANEError) == .cancelled { send(.cancelled) } else {
+            if (failure as? ScannerError) == .cancelled { send(.cancelled) } else {
                 send(.failed((failure as? LocalizedError)?.errorDescription ?? "\(failure)"))
             }
             return
@@ -450,7 +451,7 @@ public final class ScanJob {
             send(.failed(error.localizedDescription))
             return
         }
-        if case SANEError.jammed? = failure {
+        if jammed {
             send(.jammed(keptPages: keptSheets.reduce(0) { $0 + $1.sides.count }))
         } else {
             await read(keptSheets)
