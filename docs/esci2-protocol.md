@@ -24,6 +24,7 @@ Everything here comes from packet captures of Epson ScanSmart driving an FF-680W
 | Lock held | A script on the Mac opened a connection and locked the scanner, then a second connection from the same Mac opened while it was held. Only greeting, lock and unlock packets were sent; read from the socket, not `tcpdump` |
 | Scan button, wrong address | ScanSmart open and idle, the scanner's start button pressed, on a Mac with two addresses on the scanner's network (Ethernet 192.168.3.195, Wi-Fi 192.168.0.95). Nothing scanned. Captured on Ethernet with `tcpdump`, all ports |
 | Scan button | The same with Wi-Fi off, so the Mac had one address. ScanSmart scanned the stack. Captured with `tcpdump`, all ports, no packets dropped |
+| FastScan's client: scan button | FastScan's own client answering the button, four presses, changing one thing at a time (below). Captured with `tcpdump`, all ports, no packets dropped |
 
 This document records only what was observed and what it implies. Where a meaning is a guess, it says so. It contains no code from any other scanner driver, and code written from it must not consult one.
 
@@ -356,14 +357,14 @@ The scanner multicasts three identical requests to 239.255.255.253, UDP port 296
 
 | Field | Bytes | Value |
 |---|---|---|
-| Header | `02 06 00 00 66 20 00 00 00 00 00 01 00 02 65 6E` | Version 2, function 6 (attribute request), length 102, flags `20 00` (multicast), no extension, XID 1, language `en` |
+| Header | `02 06 00 00 66 20 00 00 00 00 00 01 00 02 65 6E` | Version 2, function 6 (attribute request), length 102, flags `20 00` (multicast), no extension, XID 1 here (the XID counts up with each press, the same in all three requests), language `en` |
 | Previous responders | `00 00` | None |
 | URL | `00 1C` + 28 bytes | `service:NetScanMonitor-agent` |
 | Scope | `00 08` + 8 bytes | `PID 016B` |
 | Tags | `00 28` + 40 bytes | `Ver,ClientName,IPAddress,EventPort,Group` |
 | SPI | `00 00` | None |
 
-A computer running Epson's agent answers by unicast, from an ephemeral port to the scanner's port 2968, with an SLP attribute reply: the header `02 07 00 00 6F 00 00 00 00 00 00 01 00 02 65 6E` (function 7, length 111, the request's XID 1), the error code `00 00`, `00 5A` and 90 bytes of attributes (their length depends on the computer's name), then `00` for no authentication blocks:
+A computer running Epson's agent answers by unicast, from an ephemeral port to the scanner's port 2968, with an SLP attribute reply: the header `02 07 00 00 70 00 00 00 00 00 00 01 00 02 65 6E` (function 7, length 112, the XID of the request it answers), the error code `00 00`, `00 5B` and 91 bytes of attributes (their length depends on the computer's name and address), then `00` for no authentication blocks:
 
 ```
 (Ver=3.0),(ClientName=<the Mac's name>),(IPAddress=192.168.3.195),(EventPort=2968),(Group=0)
@@ -403,6 +404,21 @@ Between answering `JobList` and `PushScan`, ScanSmart opened two short sessions 
 - **`JOBW`**, 50 bytes, expecting no reply bytes: `JOBW`, 16 zero bytes, `01 1A 18 00 00 00 00 0A 00 00`, the UTF-16LE text `Dummy`, then `03 00 00 00 02 00 00 02 01 00`. The scanner replied `A3 00` with an empty payload. Probably it writes a job named "Dummy"; the fields are unknown.
 - **`JOBR`**, 4 bytes, expecting 8. The scanner replied `03 00 02 00 00 02 00 01`, which resembles the end of `JOBW`'s payload. Probably it reads the job back.
 
+### What the computer has to send
+
+FastScan's own client answered four button presses, changing one thing at a time. Each press was a single stack, with ScanSmart quit and Epson's Event Manager, which owns port 2968, stopped:
+
+| Press | Answer | What happened |
+|---|---|---|
+| 1 | `ClientName=FastScan`, one answer per request (three) | The scanner never connected back. Its blue light flashed twice |
+| 2 | `ClientName=FastScan`, one answer per press | The scanner never connected back. Blue light, then the warning light, then the Wi-Fi light |
+| 3 | The computer's local name cut to 15 characters, as Epson's agent sends it; one answer | `JobList` arrived and was answered `OK`. Then nothing: no `PushScan` or `ScanEnd` in the four minutes captured, with the light flashing |
+| 4 | The same, then the `JOBW` and `JOBR` sessions straight after answering `JobList` | `PushScan` came 1 second later, the scan ran, and `ScanEnd` was answered `OK` |
+
+- **The name:** the scanner accepted the computer's local name, cut to 15 characters, and refused `FastScan`. Why isn't known. It might accept only names it has seen before, or check their form. Whether several answers to one press also cause a refusal isn't known either: presses 1 and 2 both used `FastScan`.
+- **The job:** the scanner waits for the `JOBW` and `JOBR` sessions before sending `PushScan`, and gives no sign of giving up. ScanSmart wrote the job before answering `JobList`; answering first and writing the job straight after worked too.
+- **`ScanEnd`:** answering `OK` (ScanSmart answered `ERROR`) made no visible difference.
+
 ### The scan
 
 After answering `PushScan`, ScanSmart scanned exactly as it does when its own Scan button is pressed: the same queries, `FS X`, a 1000-byte `PARA` with its usual parameters, `TRDT` and the `IMG` loop, ending when the feeder was empty. Nothing in the scan referred to the button or the job. About 25 ms after ScanSmart unlocked, the scanner sent `ScanEnd`.
@@ -417,7 +433,7 @@ To scan, a client needs:
 - **Cancelling:** `CAN` between `IMG` polls, then `FIN` and unlock. `#atnCAN ` in an `IMG` reply (the scanner's Stop button) asks for the same, after fetching the data that reply announced.
 - **Errors:** `#err` in an `IMG` reply stops the scan; `PJ` is a paper jam and `DFED` a double feed. Stop polling, then `FIN` and unlock. The sheets already received are complete, and the rest can be scanned in a new session once the sheet is cleared.
 - **Closing:** `FIN` and unlock.
-- **Optionally, the scanner's start button:** answer the SLP request on UDP 2968 with the address the scan will come from, answer the `JobList` and `PushScan` requests on TCP 2968, then scan as usual. Whether the `JOBW` and `JOBR` sessions are needed is an open question.
+- **Optionally, the scanner's start button:** answer the SLP request on UDP 2968 with the computer's local name and the address the scan will come from, answer `JobList` on TCP 2968, write and read the job (`JOBW`, `JOBR`), answer `PushScan`, then scan as usual.
 
 It doesn't need the maintenance queries (`FS Z`, the extended `INFO`/`CAPA`, `RESA`, the date and time), TLS, SNMP, or the UDP exchange.
 
@@ -427,5 +443,5 @@ It doesn't need the maintenance queries (`FS Z`, the extended `INFO`/`CAPA`, `RE
 - **No tables:** whether the scanner accepts a scan without gamma tables and a color matrix.
 - **Other errors during a scan:** what the unobserved `#ERRLIST` codes (`OPN`, `DCM`, `ERR`, `CLR`) mean, and whether `#atn` carries anything other than `CAN `.
 - **Continuing after an error:** what ScanSmart sends if Continue is chosen after a jam or double feed.
-- **Scanning from the button:** whether the scanner needs the `JOBW` and `JOBR` sessions, what their fields mean, what `PanelData=0110` and `Group` stand for, why ScanSmart answered `ScanEnd` with `ERROR`, and what happens when two computers answer.
+- **Scanning from the button:** why the scanner refuses some computer names, what the `JOBW` and `JOBR` fields mean, what `PanelData=0110` and `Group` stand for, why ScanSmart answered `ScanEnd` with `ERROR`, and what happens when two computers answer.
 - **Unknown values:** the greeting's payload, the lock payload's fields, the date-and-time encoding, and several `INFO` tokens.
